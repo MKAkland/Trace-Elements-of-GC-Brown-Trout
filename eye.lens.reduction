@@ -1,0 +1,521 @@
+
+```{r}
+
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(stringr)
+library(purrr)
+library(fs)
+library(readr)
+library(data.table)
+library(readxl)
+library(gdata)
+library(zoo)
+library(tidyr)
+library(tidyverse)
+library(tidymodels)
+
+```
+
+Importing, and merging LAICPMS data with my data table for my fish metadata
+
+
+```{r}
+setwd("/Users/eye_ICP_data/corrected")
+list.files("/Users/eye_ICP_data/corrected")
+Session2 <- rbindlist(mapply(c,(list.files(pattern = "*.csv") %>%
+      lapply(read.table,
+            header = T, sep = ",")),
+      (list.files(
+      pattern = "*.csv") %>%
+      basename() %>%
+      as.list()),
+  SIMPLIFY = FALSE),fill = T) %>% select(2:20)
+Session2$fishID <- Session2$V1 ## moving id to front of dataframe
+Session2 %>% relocate(fishID)
+Session2$id.new <- gsub(".csv","",as.character(Session2$fishID))
+fish.info <- read_excel("~/Desktop/Brown Trout Natal Origins Project/fishsummaries/dataset6.14.23.xlsx", 
+    col_types = c("text", "text", "date", 
+        "date", "text", "numeric", "text", 
+        "text","text", "text", "numeric", "numeric", 
+        "numeric", "numeric", "text", "text", 
+        "text", "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "text", "text", "numeric", "numeric", 
+        "numeric", "text", "text", "numeric","text", "text",
+        "text", "text", "text", "numeric","numeric"), na = c("N/A", "n/a", "NA"))
+
+oto.validated <- read.csv("~/Desktop/Brown Trout Natal Origins Project/discriminant/oto.validated.csv") ## natal origins determined by otolith + LDA model
+
+#fish.info <- merge(fish.info,hatch.dates, by = "id.new")
+```
+
+
+Binding data, ensuring date columns are working and breaking up river miles by reach
+
+```{r}
+
+##airdry<- fish.info %>% filter(pres.typ != "ethanol") ## omit ethanol for eye data
+fish.info$NEW.TLS <- round_any(fish.info$NEW.TLS, 1)
+bind <- merge(fish.info, Session2, by = "id.new", fill = T)
+bind$date.col <-as.character(bind$date.col)
+bind$date.col <-as.Date(bind$date.col, "%Y-%m-%d")
+bind$year <- strftime(bind$date.col, "%Y")
+bind$month <- strftime(bind$date.col, "%m")
+bind$r.reach <- cut(bind$RM, breaks=c(-15,0,56,80,130,180,220,281),
+  labels=c("Lees", "Reach 1","Reach 2", "Reach 3", "Reach 4", "Reach 5", "Reach 6"))
+
+bind<- bind %>% mutate(gc.reach = ifelse (Trib == "Colorado", r.reach , features))
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "1", "00 Lees"))
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "2", "01 Reach"))
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "3", "02 Reach"))
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "4", "03 Reach"))
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "5", "04 Reach"))
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "6", "05 Reach"))
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "7", "06 Reach"))
+
+### renaming movement classes I assigned in excel to just three categories
+bind$class.mov[bind$class.mov == "creek outmigrant"| bind$class.mov=="creek outmigrant spawn return"| bind$class.mov =="creek outmigrant long return"| bind$class.mov=="creek resident spawn return"] <- "outmigrant"
+bind$class.mov[bind$class.mov == "river resident stray"] <- "river resident" 
+bind$class.mov[bind$class.mov == "river-born creek spawner"] <- "river resident" 
+list(bind$class.mov)
+#omit fish that were analyzed when machine was giving crazy high background of Se
+#bind <- bind %>% filter(id.new!="TPP08"&id.new!="LFA23"&id.new!="LFA24"&id.new!="LFA25"&id.new!="TBA09"&id.new!="TBA10") #
+```
+
+
+##converting elementR proportion values into ppm
+
+```{r}
+
+bind$Time2 <- round_any(bind$Time, 1)
+bind$Time <- round_any(bind$Time, 1)
+bind$eye.core <- round_any(bind$eye.core, 1)
+bind$Rb87<-as.numeric(bind$Rb87)
+
+##convert to ppb
+
+sconc <- 9175
+
+bind$Li7 <- bind$Li7 * sconc
+bind$Na23 <- bind$Na23*sconc
+bind$Mg24 <- bind$Mg24* sconc
+bind$Mg25 <- bind$Mg25* sconc
+bind$S32 <- bind$S32* sconc
+bind$S34 <- bind$S34* sconc
+bind$Ca43 <- bind$Ca43*sconc
+bind$Mn55 <- bind$Mn55* sconc
+bind$Fe56 <- bind$Fe56* sconc
+bind$Co59 <- bind$Co59* sconc
+bind$Se78 <- bind$Se78* sconc
+bind$Br79 <- bind$Br79* sconc
+bind$Rb87 <- bind$Rb87* sconc
+bind$I127 <- bind$I127* sconc
+bind$Hg202 <- bind$Hg202* sconc
+bind$Pb208 <- bind$Pb208*sconc
+bind$U238 <- bind$U238* sconc
+
+
+bind$Li7[is.na(bind$Li7)] <- 0
+bind$Na23[is.na(bind$Na23)] <- 0
+bind$Mg24[is.na(bind$Mg24)] <- 0
+bind$Mg25[is.na(bind$Mg25)] <- 0
+bind$S32[is.na(bind$S32)] <- 0
+bind$S34[is.na(bind$S34)] <- 0
+bind$Ca43[is.na(bind$Ca43)] <- 0
+bind$Mn55[is.na(bind$Mn55)] <- 0
+bind$Fe56[is.na(bind$Fe56)] <- 0
+bind$Co59[is.na(bind$Co59)] <- 0
+bind$Se78[is.na(bind$Se78)] <- 0
+bind$Br79[is.na(bind$Br79)] <- 0
+bind$Rb87[is.na(bind$Rb87)] <- 0
+bind$I127[is.na(bind$I127)] <- 0
+bind$Hg202[is.na(bind$Hg202)] <- 0
+bind$Pb208[is.na(bind$Pb208)] <- 0
+bind$U238[is.na(bind$U238)] <- 0
+
+
+bind <- bind %>% filter(id.new!="TP01") ## this fish was run twice in LAICPMS
+
+```
+
+##converting time into distance (*7µm/second)
+#adjusting laser speed to distance
+
+
+```{r}
+
+bind <- bind %>% mutate(distance = Time2 - eye.core)
+roster <- bind %>% distinct(id.new) 
+bind <- bind %>% mutate(distance.mic = (distance*7))
+roster <- bind %>% distinct(id.new) 
+
+
+eyeoto2 <- bind %>% distinct(id.new, features)
+write.csv(eyeoto2, "~/Desktop/Brown Trout Natal Origins Project/fishsummaries/eyeoto.summary.csv")
+
+
+```
+
+##selecting core values sans primordia (maternal influence) to be averaged for natal life analysis
+
+```{r}
+
+dubset <- bind %>% filter(distance.mic < -450 & distance.mic > -600 | distance.mic > 450 & distance.mic < 600)
+
+meanLi<- dubset %>% drop_na(Li7) %>% group_by(id.new) %>% summarise(Li = mean(Li7))
+meanNa<- dubset %>%drop_na(Na23) %>% group_by(id.new)%>% summarise(Na = mean(Na23))
+meanMg<- dubset %>%drop_na(Mg25) %>% group_by(id.new)%>% summarise(Mg = mean(Mg25))
+meanS<- dubset %>%drop_na(S34) %>% group_by(id.new)%>% summarise(S = mean(S34))
+meanCa<- dubset %>%drop_na(Ca43) %>% group_by(id.new)%>% summarise(Ca = mean(Ca43))
+meanMn<- dubset %>%drop_na(Mn55) %>% group_by(id.new)%>% summarise(Mn = mean(Mn55))
+meanFe<- dubset %>%drop_na(Fe56) %>% group_by(id.new)%>% summarise(Fe = mean(Fe56))
+meanCo<- dubset %>%drop_na(Co59) %>% group_by(id.new)%>% summarise(Co = mean(Co59))
+meanSe<- dubset %>%drop_na(Se78) %>% group_by(id.new)%>% summarise(Se = mean(Se78))
+meanBr<- dubset %>%drop_na(Br79) %>% group_by(id.new)%>% summarise(Br = mean(Br79))
+meanRb<- dubset %>%drop_na(Rb87) %>% group_by(id.new)%>% summarise(Rb = mean(Rb87))
+meanI<- dubset %>%drop_na(I127) %>% group_by(id.new)%>% summarise(I = mean(I127))
+meanHg<- dubset %>%drop_na(Hg202) %>% group_by(id.new)%>% summarise(Hg = mean(Hg202))
+meanPb<- dubset %>%drop_na(Pb208) %>% group_by(id.new)%>% summarise(Pb = mean(Pb208))
+meanU<- dubset %>%drop_na(U238) %>% group_by(id.new)%>% summarise(U = mean(U238))
+
+bind <- merge(bind, meanLi, by = "id.new")
+bind <- merge(bind, meanNa, by = "id.new")
+bind <- merge(bind, meanMg, by = "id.new")
+bind <- merge(bind, meanS, by = "id.new")
+bind <- merge(bind, meanCa, by = "id.new")
+bind <- merge(bind, meanMn, by = "id.new")
+bind <- merge(bind, meanFe, by = "id.new")
+bind <- merge(bind, meanCo, by = "id.new")
+bind <- merge(bind, meanSe, by = "id.new")
+bind <- merge(bind, meanBr, by = "id.new")
+bind <- merge(bind, meanRb, by = "id.new")
+bind <- merge(bind, meanI, by = "id.new")
+bind <- merge(bind, meanHg, by = "id.new")
+bind <- merge(bind, meanPb, by = "id.new")
+bind <- merge(bind, meanU, by = "id.new")
+
+namean <- aggregate(Fe~Provenance, bind, FUN=mean)
+
+```
+
+
+##SCALING
+
+```{r}
+
+fish1 <- bind %>% filter(distance.mic >= 0)
+fish1$eyeprov <- fish1$Provenance
+fish1 <- fish1 %>% select(id.new, distance.mic,eyeprov,Li7,Na23,	Mg24,	Mg25,	S32,	S34,	Ca43,	Mn55,	Fe56,	Co59,	Se78,	Br79,	Rb87,	I127,	Hg202,	Pb208,	U238,Li,Na, Mg, Mn, Fe,Se, Rb,Hg,Pb, U)
+
+```
+## Merging Se78 and Sr88 (scaling distance from core for comparisons)
+
+```{r}
+
+all.sr <- read.csv("~/Desktop/all.oto.sr.csv")
+all.sr <- all.sr %>% select(Sr88, SrCa, id.new, dist.core.mic.sr) %>%
+  filter(dist.core.mic.sr >=0)
+all.sr <- all.sr %>% 
+  group_by(id.new) %>% 
+  mutate(sc.d.oto = scale(dist.core.mic.sr))
+
+all.se <- bind %>% select(Se78, id.new, distance.mic,Provenance, features,year) %>%
+  filter(distance.mic >=0)
+all.se <- all.se %>% 
+  group_by(id.new) %>% 
+  mutate(sc.d.eye = scale(distance.mic))
+
+merged.sr <- merge(all.sr,all.se, by="id.new")
+
+```
+
+
+
+### summarized data for analytes with crazy outliers (outlier removal)
+
+```{r}
+
+# Calculate mean and standard deviation
+mean_val <- mean(bind$U238)
+(sd_val <- sd(bind$U238))
+threshold <- 3
+outliers <- bind$U238[abs(bind$U238 - mean_val) > threshold * sd_val]
+clean_data <- bind$U238[!(abs(bind$U238 - mean_val) > threshold * sd_val)]
+average_without_outliers <- mean(clean_data)
+median_without_outliers <- median(clean_data)
+sd(clean_data)
+summary(clean_data)
+
+```
+
+###calculating eyesize (µm) at TL (mm) regression
+
+```{r}
+eyesize <- bind %>% group_by(id.new) %>% summarise(eye.mic = max(distance.mic))
+eyesize <- merge(eyesize,fish.info,by="id.new")
+eyesize <- eyesize %>% filter(id.new != "TBA11" & id.new != "MSC10" & id.new != "TBA10"&id.new != "TBA12.2"&id.new != "TP01")
+
+```
+
+
+### Maxima means (for most recent exposure)
+```{r}
+
+##mercury
+mercury <- bind %>% filter(distance.mic >= 800 | distance.mic <= -800)
+maxHg <- mercury %>% drop_na(Hg202) %>% 
+  group_by(id.new) %>% 
+  summarise(Hgmax = max(Hg202)) 
+
+uranium <- bind %>% filter(distance.mic >= 800 | distance.mic <= -800)
+maxU <- uranium %>% drop_na(U238) %>% 
+  group_by(id.new) %>% 
+  summarise(Umax = max(U238)) 
+
+Se <- bind %>% filter(distance.mic >= 800 | distance.mic <= -800)
+
+maxSe <- Se %>% group_by(id.new) %>% 
+  drop_na(Se78) %>% 
+  summarise(Semax = max(Se78))
+
+br <- bind %>% filter(distance.mic >= 800 | distance.mic <= -800)
+maxBr <- br %>% drop_na(Br79) %>% 
+  group_by(id.new) %>% 
+  summarise(Brmax = max(Br79))
+
+PB <- bind %>% filter(distance.mic >= 800 | distance.mic <= -800)
+maxPb <- PB %>% drop_na(Pb208) %>% 
+  group_by(id.new) %>% 
+  summarise(Pbmax = max(Pb208))
+
+Rb <- bind %>% filter(distance.mic >= 800 | distance.mic <= -800)
+maxRb <- Rb %>% drop_na(Rb87) %>% 
+  group_by(id.new) %>% 
+  summarise(Rbmax = max(Rb87))
+
+Na <- bind %>% filter(distance.mic >= 800 | distance.mic <= -800)
+maxNa <- Na %>% drop_na(Na23) %>% 
+  group_by(id.new) %>% 
+  summarise(Namax = max(Na23))
+
+Li <- bind %>% filter(distance.mic >= 800 | distance.mic <= -800)
+maxLi <- Li %>% drop_na(Li7) %>% 
+  group_by(id.new) %>% 
+  summarise(Limax = max(Li7))
+
+Fe <- bind %>% filter(distance.mic >= 800 | distance.mic <= -800)
+maxFe <- Fe %>% drop_na(Fe56) %>% 
+  group_by(id.new) %>% 
+  summarise(Femax = max(Fe56))
+
+Mg <- bind %>% filter(distance.mic >= 800 | distance.mic <= -800)
+maxMg <- Mg %>% drop_na(Mg25) %>% 
+  group_by(id.new) %>% 
+  summarise(Mgmax = max(Mg25))
+
+
+
+###  taking the first and last five values of each trasect to get most recent values
+Hg.last <- mercury %>%
+  group_by(id.new) %>%
+  summarize(
+    mean_first_five = mean(Hg202[1:5]),
+    mean_last_five = mean(Hg202[(n() - 4):n()])
+  )
+
+Hg.last <- Hg.last %>%
+  group_by(id.new) %>%
+  mutate(Hg.diet = mean(mean_first_five,mean_last_five))
+
+Se.last <- Se %>%
+  group_by(id.new) %>%
+  summarize(
+    mean_first_five = mean(Se78[1:5]),
+    mean_last_five = mean(Se78[(n() - 4):n()])
+  )
+
+Se.last <- Se.last %>%
+  group_by(id.new) %>%
+  mutate(Se.last = mean(mean_first_five,mean_last_five))
+
+
+diet <- merge(Hg.last, fish.info, by= "id.new")
+diet <- merge(Se.last, diet, by= "id.new")
+
+diet.recent <- diet
+```
+
+
+```{r}
+
+
+diet <- diet %>% filter(features != "Bright Angel Above Barrier") ## removing fish that are above an impassible barrier
+diet$tlcat <- cut(diet$NEW.TLS, breaks=c(-Inf,150,200,250,300,350,400,450,500,550,Inf),
+  labels=c(150,200,250, 300,350,400,450,500,550,">600"))
+
+library(rstatix)
+### t-tests
+diet <- merge(result, fish.info, by= "id.new")
+
+t.test.hg <- diet %>%
+  filter(features != "Marble"&features!="Shinumo") %>%
+  group_by(features) %>%
+  Tukey_HSD(Hg.diet)
+
+## testing small fish vs large fish differences
+diet$tlcat3 <- cut(diet$NEW.TLS, breaks=c(-Inf,300,Inf),
+  labels=c("<300",">300"))
+
+hgANOVA <- aov(Hg.diet ~ tlcat3, data = diet.recent)
+summary(hgANOVA)
+
+(tukey <- TukeyHSD(hgANOVA, conf.level=.95))
+aov <- aov(Hg.diet ~ tlcat3, data = diet)
+summary(tukey)
+plot(TukeyHSD(hgANOVA, conf.level=.95), las = 1)
+summary(hgANOVA)
+library(agricolae)
+
+hgANOVA <- aov(Hg.diet ~ tlcat, data = diet)
+hgANOVA
+(tukey2 <- HSD.test(aov, "tlcat", group=TRUE))
+```    
+
+```{r}   
+    
+fhg <- merge(maxHg, fish.info, by= "id.new")
+rb <- merge(hg, maxRb, by="id.new")
+Se <- merge(hg, maxSe, by="id.new")
+Se <- merge(Se, maxU, by="id.new")
+Se <- merge(Se, maxNa, by="id.new")
+Se <- merge(Se, maxFe, by="id.new")
+Se <- merge(Se, maxLi, by="id.new")
+Se <- merge(Se, maxMg, by="id.new")
+Se <- merge(Se, maxPb, by="id.new")
+MAX <- merge(Se, maxBr, by="id.new")
+
+MAX <- MAX %>% distinct()
+maxlong <- gather(MAX, analyte, value,Semax:Brmax, factor_key=T)
+
+```
+
+```{r}
+MAX <- merge(MAX,oto.validated,by="id.new")
+
+mon <- bind %>% select(month, id.new)
+classs <- bind %>% select(id.new, class.mov)
+MAX<- merge(MAX,mon,by= "id.new")
+MAX <- merge(classs, MAX, by = "id.new")
+
+MAX2 <- merge(maxSe, bind, by = "id.new")
+
+```
+
+### MERCURY
+```{r}
+
+Se$tlcat <- cut(Se$NEW.TLS, breaks=c(-Inf,150,200,250,300,350,400,450,500,550,600,Inf),
+  labels=c(150,200,250, 300,350,400,450,500,550,600,650))
+#eye.Hg$tlcat<- as.numeric(eye.Hg$tlcat)
+tba <- Se %>% filter(Trib=="Colorado")
+
+
+Se <- Se %>% mutate(features = str_replace(features, "BAC", "Bright Angel"))
+Se <- Se %>% mutate(features = str_replace(features, "Bright Angel Lower", "BAC Lower"))
+Se <- Se %>% mutate(features = str_replace(features, "Western GC", "WGC"))
+Se <- Se %>% mutate(features = str_replace(features, "Bright Angel Upper", "BAC Upper"))
+Se <- Se %>% mutate(features = str_replace(features, "Bright Angel Above Barrier", "BAC A.B."))
+Se <- Se %>% mutate(features = str_replace(features, "Marble", "Marble C."))
+Se <- Se %>% mutate(features = str_replace(features, "Western GC", "WGC"))
+Se$features = factor(Se$features, levels = c("Lees", "Marble C.","BAC Lower","BAC Upper","BAC A.B.", "Shinumo","Tapeats","WGC"), ordered = TRUE)
+big.fish <- Se %>% filter(NEW.TLS > 300 | features != "Bright Angel A.B.")
+
+```
+
+
+
+```{r}
+
+library(factoextra)
+library(ggfortify)
+
+pca1 <- bind %>% distinct(Provenance,id.new,Li,Na,Rb,Se,U,Hg,Br)
+pca <- pca1 %>% distinct(Li,Na,Rb,Se,U,Hg,Br)
+pca_res <-prcomp(pca, scale. = T)
+fviz_eig(pca_res)
+
+pca_res$rotation <- pca_res$rotation*-1
+autoplot(pca_res, loadings = T,  loadings.label=T,label=T)+
+theme_bw()
+binder <- cbind(pca1, pca_res$x[,1:2])
+```
+
+```{r}
+##MANOVA + hotellings t-tests
+
+htl <- merge(oto.validated, bind, by = "id.new")# hotellings
+htl <- htl %>% distinct(id.new,Provenance,Li,Na,Rb,Se,U,Hg,Fe,I,U,validated)
+
+bac <- htl  %>% filter(validated == "Bright Angel")%>% select(4:11)
+glc <- htl %>% filter(validated == "Lees Ferry")%>% select(4:11)
+tps <- htl %>% filter(validated == "Tapeats")%>% select(4:11)
+
+library(ICSNP)
+
+HotellingsT2(bac,glc)
+HotellingsT2(tps,glc)
+HotellingsT2(tps,bac)
+
+library(candisc)
+
+lda <- bind %>% filter(Provenance!=0)
+lda$Provenance <- as.factor(lda$Provenance)
+
+lda <- lda %>% distinct(id.new,Provenance,Li,Na,Rb,Se,U,Hg,Fe,U)
+## hotellings T test
+bac <- lda  %>% filter(Provenance == "BAC")%>% select(3:8)
+glc <- lda %>% filter(Provenance == "LF")%>% select(3:8)
+tps <- lda %>% filter(Provenance == "TP")%>% select(3:8)
+
+### canonical disciminant
+can.mod <- lm(cbind(Li,Na,Rb,Se,Fe,Hg,U) ~ Provenance, data=lda)
+method.can <- candisc(can.mod, data=corevals)
+summary(method.can)
+method.can
+col <- c("dodgerblue3", "orange", "tomato2")
+pch <- 1:3
+plot(method.can, pch=pch, var.cex = .65, var.pos = 3, var.col = "black",ellipse=T)
+```
+
+
+Linear discriminant analysis
+```{r}
+
+lda <- bind %>% distinct(id.new, Provenance,Li,Na,Rb,Se,Hg,Fe,Pb,U,I,Ca)
+testrun <- lda %>% filter(Provenance != 0)
+testrun[3:12] <- scale(testrun[3:12])
+apply(testrun[3:12], 2, mean)
+apply(testrun[3:12], 2, sd)
+set.seed(555)
+sample <- sample(c(T, F), nrow(testrun), replace = T, prob = c(0.7,0.3))
+train1 <- testrun[sample, ]
+test2 <- testrun[!sample, ]
+test_Y <- test1[, c('Provenance')]
+test_X <- subset(test2, select=-c(Provenance))
+library(MASS)
+model1 <- lda(Provenance ~ Na+ Rb+ Se+I +Hg+U, data = train1, prior = c(1,1,1)/3)
+(model1)
+
+predicted <- predict(model1, test2)
+predicted$class
+head(predicted$posterior)
+mean(predicted$class==test2$Provenance)
+
+```
+
+
+
+
