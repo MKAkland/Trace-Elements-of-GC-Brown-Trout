@@ -1,0 +1,540 @@
+
+```{r}
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(stringr)
+library(purrr)
+library(fs)
+library(readr)
+library(data.table)
+library(readxl)
+library(gdata)
+library(zoo)
+library(tidyr)
+
+
+
+```
+
+Importing, and merging LAICPMS data with  data table of fish location/date/size data
+
+
+```{r}
+setwd("/Users/icp_data_corrected")
+list.files("/Users/icp_data_corrected")
+Session1 <- rbindlist(mapply(c,(list.files(pattern = "*.csv") %>%
+      lapply(read.table,
+             quote="",
+            header = T, sep = ",")),
+      (list.files(
+      pattern = "*.csv") %>%
+      basename() %>%
+      as.list()),
+  SIMPLIFY = T),fill = T) %>% select(2:17)
+Session1$fishID <- Session1$V1
+Session1 %>% relocate(fishID)
+Session1$id.new <- gsub(".csv","",as.character(Session1$fishID))
+fish.info <- read_excel("~/Desktop/Brown Trout Natal Origins Project/fishsummaries/dataset6.14.23.xlsx", 
+    col_types = c("text", "text", "date", 
+        "date", "text", "numeric", "text", 
+        "text","text", "text", "numeric", "numeric", 
+        "numeric", "numeric", "text", "text", 
+        "text", "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "text", "text", "numeric", "numeric", 
+        "numeric", "text", "text", "numeric","text", "text",
+        "text", "text", "text", "numeric","numeric"), na = c("N/A", "n/a", "NA"))
+#fish.info <- merge(age, fish.info, by = "id.new")
+
+Session1$id.new<-gsub("#","",as.character(Session1$id.new))
+```
+### Binding data, ensuring date columns are working and breaking up river miles by reach
+
+```{r}
+
+##airdry<- fish.info %>% filter(pres.typ != "ethanol") ## omit ethanol for eye data
+
+bind <- merge(fish.info, Session1, by = "id.new", fill = T)
+roster <- bind %>% distinct(id.new) 
+bind$date.col <-as.character(bind$date.col)
+roster <- bind %>% distinct(id.new) 
+bind$date.col <-as.Date(bind$date.col, "%Y-%m-%d")
+roster <- bind %>% distinct(id.new) 
+bind$year <- strftime(bind$date.col, "%Y")
+roster <- bind %>% distinct(id.new) 
+bind$month <- strftime(bind$date.col, "%m")
+roster <- bind %>% distinct(id.new) 
+bind$r.reach <- cut(bind$RM, breaks=c(-15,0,56,80,130,180,220,281),
+  labels=c("Lees Ferry", "Reach 1","Reach 2", "Reach 3", "Reach 4", "Reach 5", "Reach 6"))
+roster <- bind %>% distinct(id.new) 
+
+bind<- bind %>% mutate(gc.reach = ifelse (Trib == "Colorado", r.reach , features))
+roster <- bind %>% distinct(id.new) 
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "1", "00 Lees"))
+roster <- bind %>% distinct(id.new) 
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "2", "01 Reach"))
+roster <- bind %>% distinct(id.new) 
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "3", "02 Reach"))
+roster <- bind %>% distinct(id.new) 
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "4", "03 Reach"))
+roster <- bind %>% distinct(id.new) 
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "5", "04 Reach"))
+roster <- bind %>% distinct(id.new) 
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "6", "05 Reach"))
+roster <- bind %>% distinct(id.new) 
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "7", "06 Reach"))
+roster <- bind %>% distinct(id.new) 
+
+## renaming movement class (generic dataframe cleanup_
+
+bind$class.mov[bind$class.mov == "creek outmigrant"| bind$class.mov=="creek outmigrant spawn return"| bind$class.mov =="creek outmigrant long return"| bind$class.mov=="creek resident spawn return"] <- "outmigrant"
+roster <- bind %>% distinct(id.new) 
+bind$class.mov[bind$class.mov == "river resident stray"] <- "river resident" 
+roster <- bind %>% distinct(id.new) 
+bind$class.mov[bind$class.mov == "river stray"] <- "river resident" 
+roster <- bind %>% distinct(id.new) 
+bind$class.mov[bind$class.mov == "river-born creek spawner"] <- "river resident" 
+roster <- bind %>% distinct(id.new) 
+bind$class.mov[bind$class.mov == "river-resident creek spawner"] <- "river resident" 
+roster <- bind %>% distinct(id.new) 
+bind$class.mov[bind$class.mov == "creek stray"] <- "outmigrant" 
+roster <- bind %>% distinct(id.new) 
+
+#if I want to omit anything that have lots of vateritic otoliths from analysis, (or had wacky LA-ICPMS values)
+
+bind <- bind %>% filter(id.new != "ASP01" & id.new!= "MSC58.2" & id.new!="MSC39.2" & id.new != "TPT08" & id.new != "MSC23" & id.new != "TBA11")
+
+bind <- bind %>% mutate(gc.reach = str_replace(gc.reach, "1", "Lees"))
+
+## assigning standardized relative weight for each fish
+
+bind <- bind %>% mutate(logW=log10(WT),logL=log10(TL))
+stbnt_func <- function(x=bind$logL, slope=2.96, int=-4.867){
+  sw <- slope*x + int
+  return(sw)
+}
+                                ###relative condition for fish >140mm
+bind$sw <- stbnt_func()
+bind <- bind %>% mutate(Wr = WT/(10^sw)*100)
+
+```
+
+
+## color palettes 
+```{r}
+library(RColorBrewer)
+base_palette <- brewer.pal(9, "Set1")
+color_palette <- colorRampPalette(base_palette)(10)
+cbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#999999","#D55E00", "#CC79A7")
+```
+
+
+# Conversion stuff 1. Rounding the time from LA-ICPMS to intervals of 5 2. Rounding my inputted (observed) core times by intervals so it can be identified in following code.
+
+```{r}
+
+roster <- bind %>% distinct(id.new) 
+bind$Time2 <- round_any(bind$Time, 1)
+bind$Time <- round_any(bind$Time, 1)
+bind$core.time <- round_any(bind$core.time, 1)
+
+```
+
+###  Mutating element conc. to ratios, mostly ratios to Ca44
+### ppm = output * calcium conversion factor from elementR
+
+```{r}
+
+conc. <- 338300 # calcium conversion used in calibration file
+
+bind$B11 <- (bind$B11*conc.)
+bind$Mg24 <-(bind$Mg24*conc.)
+bind$Mg25 <- (bind$Mg25*conc.)
+bind$Mg26 <- (bind$Mg26*conc.)
+bind$P31 <- (bind$P31*conc.)
+bind$P31 <- (bind$P31*conc.)
+bind$Ca44 <- (bind$Ca44*conc.)
+bind$Mn55 <- (bind$Mn55*conc.)
+bind$Cu63 <- (bind$Cu63*conc.)
+bind$Zn66 <- (bind$Zn66*conc.)
+bind$Sr88 <- (bind$Sr88*conc.)
+bind$I127 <- as.numeric(bind$I127)
+bind$I127[is.na(bind$I127)] <- 0
+bind$I127 <- (bind$I127*conc.)
+bind$Ba138 <- (bind$Ba138*conc.)
+bind$Pb208 <- (bind$Pb208*conc.)
+
+## then making the proper ratio's to Ca44 (the Ca isotope that wasnt used in elenentR)
+
+bind <- bind %>% mutate(MnCa = (Mn55/Ca44)*1000)
+bind <- bind %>% mutate(MgCa = (Mg25/Ca44)*1000)
+bind <- bind %>% mutate(ZnCa = (Zn66/Ca44)*1000)
+bind <- bind %>% mutate(SrCa = (Sr88/Ca44)*1000)
+bind <- bind %>% mutate(BaCa = (Ba138/Ca44)*1000)
+bind <- bind %>% mutate(BCa = (B11/Ca44)*1000)
+bind <- bind %>% mutate(PbCa = (Pb208/Ca44)*1000)
+bind <- bind %>% mutate(CuCa = (Cu63/Ca44)*1000)
+bind <- bind %>% mutate(PCa = (P31/Ca44)*1000)
+bind <- bind %>% mutate(ICa = (I127/Ca44)*1000)
+bind <- bind %>% mutate(ICa = (I127*1000/Ca44*1000))
+
+#odd combinations just for fun
+bind <- bind %>% mutate(BaMn = (Ba138/Mn55)*1000)
+bind <- bind %>% mutate(SrBa = (SrCa/BaCa)*1000)
+bind <- bind %>% mutate(MnZn = (Mn55/Zn66)*1000)
+bind <- bind %>% mutate(MnMg = (MnCa/MgCa)*1000)
+bind <- bind %>% mutate(MgMn = (Mg25*1000/Mn55*1000))
+
+## lots of na's, gotta turn them into 0's
+bind$PbCa[is.na(bind$PbCa)] <- 0
+bind$ICa[is.na(bind$ICa)] <- 0
+bind$BaCa[is.na(bind$BaCa)] <- 0
+
+
+```
+## if I want to remove all fish that are completely vateritic 
+
+```{r}
+
+vats <- bind %>% filter(vat.cum == 100) ## vateritic fish bin
+bind <- bind %>% filter(vat.cum < 100) ## everybody with healthy otoliths bin
+
+```
+
+### summarizing and correlation
+##  data (only include in code when recalculating)
+summary.long <- gather(bind, analyte, value, B11:Pb208, factor_key=T) %>% 
+  select(analyte, value) %>% 
+  na.omit()
+
+
+summary_df <- summary(summary.long)
+
+summary_table <- summary.long %>%
+  group_by(analyte) %>%
+  summarize(
+    Mean = mean(value),
+    Median = median(value),
+    SD = sd(value),
+    Range = max(value) - min(value)
+  )
+
+
+corr <- bind %>% select(B11, Mg24, Mg25, Mg26, P31, Ca44, Mn55, Cu63, Zn66, Sr88,I127,Ba138,Pb208)%>%
+ # na.omit()
+ 
+ 
+correlationdata <- (corr)
+cor <- as.data.frame(cor(correlationdata))
+
+
+### backcalculating hatch date based on Year minus Age
+
+```{r}
+
+bind$year2<-as.numeric(bind$year)
+bind <- bind %>% mutate(hatch = year2 - age, NA)
+hatch.dates <- bind %>% distinct(id.new,hatch)
+```
+
+mutating to identify the exact time that the laser passed over the core, 
+and identifying the concentration of each element of focus at that moment. 
+Because I had intervals of 5 for the time, I needed to use the | symbol to ensure 
+that a value was selected (if it was more than 1 integer away, I needed to try 2, 
+                           then 3, and so on., otherwise NA would be output.
+
+```{r}
+
+Sr <- bind  %>% mutate(coreSr = ifelse(Time2 == core.time | 
+                                         Time2 == core.time+1 |
+                                         Time2 == core.time-1 |
+                                         Time2 == core.time+2|
+                                         Time2 == core.time-2|
+                                         Time2 == core.time+3|
+                                         Time2 == core.time-3|
+                                         Time2 == core.time+4|
+                                         Time2 == core.time-4, SrCa, NA)) %>% select(id.new, coreSr) %>% na.omit()
+roster2 <- Sr %>% distinct(id.new) 
+Zn <- bind  %>% mutate(coreZn = ifelse(Time2 == core.time | 
+                                         Time2 == core.time+1 |
+                                         Time2 == core.time-1 |
+                                         Time2 == core.time+2|
+                                         Time2 == core.time-2|
+                                         Time2 == core.time+3|
+                                         Time2 == core.time-3|
+                                         Time2 == core.time+4|
+                                         Time2 == core.time-4, ZnCa, NA)) %>% select(id.new, coreZn) %>% na.omit()
+roster <- Zn %>% distinct(id.new) 
+
+
+P <- bind %>% distinct() %>% mutate(coreP = ifelse (Time2 == core.time | 
+                                         Time2 == core.time+1 |
+                                         Time2 == core.time-1 |
+                                         Time2 == core.time+2|
+                                         Time2 == core.time-2|
+                                         Time2 == core.time+3|
+                                         Time2 == core.time-3|
+                                         Time2 == core.time+4|
+                                         Time2 == core.time-4, PCa, NA)) %>% select(id.new, coreP) %>% na.omit()
+roster <- P %>% distinct(id.new) 
+
+Cu <- bind  %>% distinct()%>% mutate(coreCu = ifelse(Time2 == core.time | 
+                                         Time2 == core.time+1 |
+                                         Time2 == core.time-1 |
+                                         Time2 == core.time+2|
+                                         Time2 == core.time-2|
+                                         Time2 == core.time+3|
+                                         Time2 == core.time-3|
+                                         Time2 == core.time+4|
+                                         Time2 == core.time-4, CuCa, NA)) %>% select(id.new, coreCu) %>% na.omit()
+roster <- Cu %>% distinct(id.new) 
+
+Mn <- bind  %>% distinct()%>% mutate(coreMn = ifelse(Time2 == core.time | 
+                                         Time2 == core.time+1 |
+                                         Time2 == core.time-1 |
+                                         Time2 == core.time+2|
+                                         Time2 == core.time-2|
+                                         Time2 == core.time+3|
+                                         Time2 == core.time-3|
+                                         Time2 == core.time+4|
+                                         Time2 == core.time-4, MnCa, NA)) %>% select(id.new, coreMn) %>% na.omit()
+roster <- Mn %>% distinct(id.new) 
+
+Ba <- bind  %>% distinct()%>% mutate(coreBa = ifelse (Time2 == core.time | 
+                                         Time2 == core.time+1 |
+                                         Time2 == core.time-1 |
+                                         Time2 == core.time+2|
+                                         Time2 == core.time-2|
+                                         Time2 == core.time+3|
+                                         Time2 == core.time-3|
+                                         Time2 == core.time+4|
+                                         Time2 == core.time-4, BaCa, NA)) %>% select(id.new, coreBa) %>% na.omit()
+roster <- Ba %>% distinct(id.new) 
+
+Mg <- bind  %>% distinct()%>% mutate(coreMg = ifelse (Time2 == core.time | 
+                                         Time2 == core.time+1 |
+                                         Time2 == core.time-1 |
+                                         Time2 == core.time+2|
+                                         Time2 == core.time-2|
+                                         Time2 == core.time+3|
+                                         Time2 == core.time-3|
+                                         Time2 == core.time+4|
+                                         Time2 == core.time-4, MgCa, NA)) %>% select(id.new, coreMg) %>% na.omit()
+roster <- Mg %>% distinct(id.new) 
+
+Pb <- bind  %>% distinct()%>% mutate(corePb = ifelse (Time2 == core.time|
+                                         Time2 == core.time+1|
+                                         Time2 == core.time-1|
+                                         Time2 == core.time+2|
+                                         Time2 == core.time-2|
+                                         Time2 == core.time+3|
+                                         Time2 == core.time-3|
+                                         Time2 == core.time+4|
+                                          Time2 == core.time-4, PbCa, NA)) %>% select(id.new, corePb) %>% na.omit()
+
+roster <- Pb %>% distinct(id.new)
+```
+
+
+                           
+####mutating for laser speed and distance 7 microns a second (conversion)
+                           
+```{r}
+# subtracting the time that laser passed over the core from the laser time, hence, 
+# the core is a value of 0, and anyting before it is a negative value, and past it is positive
+bind <- bind %>% mutate(dist.core.sr.t = Time2 - core.time) 
+bind <- bind %>% mutate(dist.core.mic.sr = (dist.core.sr.t*7))
+
+dist.subset <- bind %>% mutate(dist.time = Time - core.time)
+roster <- dist.subset %>% distinct(id.new) 
+dist.subset <- dist.subset %>% mutate(distance.core = (dist.time*7))
+roster <- dist.subset %>% distinct(id.new) 
+dist.all <- dist.subset %>% filter(distance.core < -180 & distance.core > -230 | distance.core > 180 & distance.core < 230)
+
+
+                           
+## these fish had messed up transects on one side of their otolith, so I omitted half of their transect
+MSC49 <- dist.subset %>% filter(id.new == "MSC49") %>% filter(distance.core < -180 & distance.core > -200)
+MSC55 <- dist.subset %>% filter(id.new == "MSC55") %>% filter(distance.core > 200 & distance.core < 250)
+## putting it all back together
+dist.all <- rbind(MSC49, dist.all)
+dist.all <- rbind(MSC55, dist.all)
+```
+getting the means of these areas within each otolith
+```{r}
+
+mean.sr <- dist.all %>% drop_na(SrCa) %>% group_by(id.new) %>% summarise(Sr = mean(SrCa))
+roster <- mean.sr %>% distinct(id.new) 
+mean.ba <- dist.all %>% drop_na(BaCa) %>% group_by(id.new) %>% summarise(Ba = mean(BaCa))
+roster <- mean.ba %>% distinct(id.new) 
+mean.zn <- dist.all %>% drop_na(ZnCa) %>% group_by(id.new) %>% summarise(Zn = mean(ZnCa))
+roster <- mean.zn %>% distinct(id.new) 
+mean.Mn <- dist.all %>% drop_na(MnCa) %>% group_by(id.new) %>% summarise(Mn = mean(MnCa))
+roster <- mean.Mn %>% distinct(id.new) 
+mean.P <- dist.all %>% drop_na(PCa) %>% group_by(id.new) %>% summarise(P = mean(PCa))
+roster <- mean.P %>% distinct(id.new) 
+mean.Cu <- dist.all %>% drop_na(CuCa) %>% group_by(id.new) %>% summarise(Cu = mean(CuCa))
+roster <- mean.Cu %>% distinct(id.new) 
+mean.Mg <- dist.all %>% drop_na(MgCa) %>% group_by(id.new) %>% summarise(Mg = mean(MgCa))
+roster <- mean.Mg %>% distinct(id.new) 
+mean.Pb <- dist.all %>% drop_na(PbCa) %>% group_by(id.new) %>% summarise(Pb = mean(PbCa))
+roster <- mean.Pb %>% distinct(id.new) 
+mean.I <- dist.all %>% drop_na(ICa) %>% group_by(id.new) %>% summarise(I = mean(ICa))
+roster <- mean.I %>% distinct(id.new) 
+
+```
+## putting all of these mean values for each fish back into the big dataframe
+```{r}
+
+bind <- merge(bind, mean.sr, by = "id.new")
+roster <- bind %>% distinct(id.new) 
+bind <- merge(bind, mean.ba, by = "id.new")
+roster <- bind %>% distinct(id.new) 
+bind <- merge(bind, mean.zn, by = "id.new")
+roster <- bind %>% distinct(id.new) 
+bind <- merge(bind, mean.Mn, by = "id.new")
+roster <- bind %>% distinct(id.new) 
+bind <- merge(bind, mean.P, by = "id.new")
+roster <- bind %>% distinct(id.new) 
+bind <- merge(bind, mean.Cu, by = "id.new")
+roster <- bind %>% distinct(id.new) 
+bind <- merge(bind, mean.Mg, by = "id.new")
+roster <- bind %>% distinct(id.new) 
+bind <- merge(bind, mean.Pb, by = "id.new")
+roster <- bind %>% distinct(id.new) 
+bind <- merge(bind, mean.I, by = "id.new") ### I intermittently omit I, its very problematic!
+roster <- bind %>% distinct(id.new) 
+
+
+```
+
+moving all adult fish that arent provenance fish into a dataframe (exluding fish from above barrier)
+                           
+```{r}
+
+bacp <- bind %>% filter(features== "Bright Angel")
+lfrp <- bind %>% filter(features=="Lees")
+tpsp <- bind %>% filter(features=="Tapeats")
+wcgp <- bind %>% filter(features == "Western GC")
+mbcp <- bind %>% filter(features == "Marble")
+lcrp <- bind %>% filter(features == "LCR Confluence")
+delp <- bind %>% filter(Trib == "Bright Angel")
+#tba <- bind %>% filter(features == "Bright Angel Above Barrier")
+shi <- bind %>% filter(features =="Shinumo")
+wal <- bind %>% filter(features =="Wall")
+tran <- bind %>% filter(features =="Transept")
+pcabind <- rbind(bacp,lfrp)
+pcabind <- rbind(pcabind, tpsp)
+pcabind <- rbind(pcabind, wcgp) 
+pcabind <- rbind(pcabind, mbcp)
+pcabind <- rbind(pcabind, delp)
+#pcabind <- rbind(pcabind, tba)
+pcabind <- rbind(pcabind, lcrp)
+pcabind <- rbind(pcabind, shi)
+pcabind <- rbind(pcabind, wal)
+pcabind <- rbind(pcabind, tran)
+pcabind$features <- as.factor(pcabind$features)
+pcabind$Provenance <- as.factor(pcabind$Provenance)
+
+#renaming a couple features (locations)
+pcabind <- pcabind %>% mutate(features = str_replace(features, "Lees", "Glen C."))
+pcabind <- pcabind %>% mutate(features = str_replace(features, "Marble", "Marble C."))
+pcabind <- pcabind %>% mutate(Provenance = str_replace(Provenance, "LF", "Lees Ferry"))
+pcabind <- pcabind %>% mutate(Provenance = str_replace(Provenance, "TP", "Tapeats"))
+pcabind <- pcabind %>% mutate(Provenance = str_replace(Provenance, "BAC", "Bright Angel"))
+pcabind$Provenance <- as.factor(pcabind$Provenance)
+
+```
+
+###omitting more fish because of ambiguous core values (early emigration makes natal origin id impossible)
+
+```{r}
+
+washedout <- bind %>% filter(id.new=="MSC08"|id.new=="MSC65"|id.new=="MSC47.2"|id.new=="OTEL50"|id.new=="MSC02"|
+                             id.new=="MSC38"|id.new=="MSC42.2"|id.new=="MSC04"|id.new=="MSC65"|id.new=="MSC20"|
+                             id.new=="MSC03.2"|id.new=="MSC16")
+pcabind <- pcabind %>% filter(id.new!="BAC06"&id.new!="MSC08"&id.new!="MSC65"&id.new!="MSC47.2"&id.new!="OTEL50"&
+                              id.new!="MSC02"&id.new!="MSC38"&id.new!="MSC42.2"&id.new!="MSC04"&id.new!="MSC65"&
+                              id.new!="MSC20"&id.new!="MSC03.2"&id.new!="TP01.2"|id.new=="MSC16")#& id.new!="MGR08"& id.new!="MSC59")
+
+(list.of <- pcabind %>% distinct(id.new,features,year,Provenance))
+proves <- list.of %>% filter(Provenance != 0)
+
+```
+
+##LINEAR DISCRIMINANT ANALYSIS
+
+#LDA with each otolith core is averaged 12/18/22 (provenance first) 
+### THE TESTING/TRAINING of the MODEL (should be first) before adults are predited
+
+```{r}
+
+testrun <- pcabind %>% dplyr :: select(id.new, features, Provenance, Sr, Ba, P, Cu, Mg,Mn)
+testrun <- pcabind %>% dplyr :: distinct(id.new, features, Provenance, Sr, Ba, P, Cu, Mg,Mn)
+testrun <- testrun %>% filter(Provenance != 0)
+testrun[4:9] <- scale(testrun[4:9])
+apply(testrun[4:9], 2, mean)
+apply(testrun[4:9], 2, sd)
+set.seed(555)
+sample <- sample(c(T, F), nrow(testrun), replace = T, prob = c(0.7,0.3))
+train1 <- testrun[sample, ]
+test1 <- testrun[!sample, ]
+test_Y <- test1[, c('Provenance')]
+test_X <- subset(test1, select=-c(Provenance))
+library(MASS)
+model1 <- lda(Provenance ~ Sr + Ba + Mn + Cu, data = train1, prior = c(1,1,1)/3)
+(model1)
+
+predicted <- predict(model1, test1)
+
+mean(predicted$class==test1$Provenance) ### this tells us the precision of the model (how many guesses it got right)
+
+detach(package:MASS,unload=TRUE)
+
+lda_plot2 <- cbind(train1, predict(model1)$x)
+
+lda_plot2 <- lda_plot2 %>% mutate(Provenance = str_replace(Provenance, "LF", "Lees Ferry"))
+lda_plot2 <- lda_plot2 %>% mutate(Provenance = str_replace(Provenance, "TP", "Tapeats Creek"))
+lda_plot2 <- lda_plot2 %>% mutate(Provenance = str_replace(Provenance, "BAC", "Bright Angel"))
+
+```
+
+### REAL LDA OF CHOICE:
+        #create model then apply to fish with unknown classes (w/ oto averages) 7/19/23
+
+```{r}
+
+lda <- pcabind %>% distinct(id.new,features, Provenance, Sr, Ba, P, Cu, Mn, Mg) 
+provenance <- lda %>% dplyr ::select(id.new,features, Provenance, Sr, Ba, P, Cu, Mn, Mg)
+adults <- lda %>% dplyr :: select(id.new,features, Provenance, Sr, Ba, P, Cu, Mn, Mg)
+adults <- subset(adults,is.na(Provenance))
+provenance$features <- as.factor(provenance$features)
+provenance <- provenance %>% filter(Provenance != 0) ## filtering out all provenance fish (we know the hatch location)
+provenance$Provenance <- as.factor(provenance$Provenance)
+
+#Adult test fish
+adults$features <- as.factor(adults$features)
+adults$Provenance <- as.factor(adults$Provenance)
+
+#Scaling
+provenance[4:9] <- scale(provenance[4:9])
+adults[4:9] <- scale(adults[4:9])
+
+#separating training (priors) and test datasets
+train <- provenance
+test <- adults
+library(MASS)
+set.seed(646)
+ldamodel <- lda(Provenance ~ Sr+Ba+Cu+Mn, data = train, prior = c(1,1,1)/3)                    
+(ldamodel)
+coef<- as.data.frame(ldamodel[["scaling"]])
+coef$analyte <- row.names(coef)
+detach(package:MASS,unload=TRUE)
+means <- as.data.frame(ldamodel[["means"]])
+predicted <- predict(ldamodel, test)
+lda_plot2 <- cbind(train, predict(ldamodel)$x)
+
+```
+
